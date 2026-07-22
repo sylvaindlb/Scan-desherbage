@@ -5,8 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Scan Désherbage — Bibliothèque</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.20.0/umd/index.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.1/umd/zxing-browser.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.19.1/umd/index.min.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -786,7 +785,6 @@ input.addEventListener('keydown', e => {
 
 // ── Scan caméra (ZXing) ─────────────────────────────────────────────
 let zxingReader = null;
-let scannerControls = null;
 let torchOn = false;
 let lastScanTime = 0;
 let lastScanValue = '';
@@ -804,7 +802,7 @@ function getZXingReader() {
   ];
   hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
   hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-  zxingReader = new ZXingBrowser.BrowserMultiFormatReader(hints);
+  zxingReader = new ZXing.BrowserMultiFormatReader(hints);
   return zxingReader;
 }
 
@@ -824,7 +822,7 @@ async function openScanner() {
     return;
   }
 
-  if (typeof ZXingBrowser === 'undefined' || typeof ZXing === 'undefined') {
+  if (typeof ZXing === 'undefined') {
     setScannerStatus('Librairie de scan non chargée — vérifiez votre connexion internet et rechargez la page.');
     return;
   }
@@ -832,42 +830,45 @@ async function openScanner() {
   try {
     const reader = getZXingReader();
     const videoEl = document.getElementById('scanner-video');
-    const constraints = { video: { facingMode: { ideal: 'environment' } } };
 
-    const onDecode = (result) => {
-      if (!result) return;
-      const text = result.getText();
-      const now = Date.now();
-      if (text === lastScanValue && now - lastScanTime < 1500) return;
-      lastScanValue = text;
-      lastScanTime = now;
-
-      if (navigator.vibrate) navigator.vibrate(80);
-      setScannerStatus('✓ Code lu : ' + text);
-
-      document.getElementById('scan-input').value = text;
-      showResult(text);
-
-      setTimeout(closeScanner, 350);
-    };
-
-    if (typeof reader.decodeFromConstraints === 'function') {
-      scannerControls = await reader.decodeFromConstraints(constraints, videoEl, (result) => onDecode(result));
-    } else if (typeof reader.decodeFromVideoDevice === 'function') {
-      // Repli : laisse le navigateur choisir la caméra par défaut
-      await reader.decodeFromVideoDevice(undefined, videoEl, (result) => onDecode(result));
-      scannerControls = reader; // reader.reset() servira à stopper
-    } else {
-      throw new Error('Aucune méthode de scan disponible dans la librairie chargée.');
-    }
-
-    // Afficher le bouton torche si supporté
-    const stream = videoEl.srcObject;
-    const track = stream ? stream.getVideoTracks()[0] : null;
-    const caps = track && track.getCapabilities ? track.getCapabilities() : {};
-    document.getElementById('scanner-torch').style.display = caps.torch ? 'block' : 'none';
+    // Choisir la caméra arrière si plusieurs sont disponibles
+    let deviceId;
+    try {
+      const devices = await reader.listVideoInputDevices();
+      if (devices && devices.length) {
+        const back = devices.find(d => /back|rear|environment/i.test(d.label));
+        deviceId = back ? back.deviceId : devices[devices.length - 1].deviceId;
+      }
+    } catch (e) { /* pas grave, on laisse undefined */ }
 
     setScannerStatus('Visez le code-barres…');
+
+    reader.decodeFromVideoDevice(deviceId, videoEl, (result, err) => {
+      if (result) {
+        const text = result.getText();
+        const now = Date.now();
+        if (text === lastScanValue && now - lastScanTime < 1500) return;
+        lastScanValue = text;
+        lastScanTime = now;
+
+        if (navigator.vibrate) navigator.vibrate(80);
+        setScannerStatus('✓ Code lu : ' + text);
+
+        document.getElementById('scan-input').value = text;
+        showResult(text);
+
+        setTimeout(closeScanner, 350);
+      }
+    });
+
+    // Afficher le bouton torche si supporté (une fois le flux démarré)
+    setTimeout(() => {
+      const stream = videoEl.srcObject;
+      const track = stream ? stream.getVideoTracks()[0] : null;
+      const caps = track && track.getCapabilities ? track.getCapabilities() : {};
+      document.getElementById('scanner-torch').style.display = caps.torch ? 'block' : 'none';
+    }, 500);
+
   } catch (err) {
     console.error(err);
     if (err.name === 'NotAllowedError') {
@@ -883,12 +884,8 @@ async function openScanner() {
 function closeScanner() {
   const overlay = document.getElementById('scanner-overlay');
   overlay.classList.remove('active');
-  if (scannerControls) {
-    try {
-      if (typeof scannerControls.stop === 'function') scannerControls.stop();
-      else if (typeof scannerControls.reset === 'function') scannerControls.reset();
-    } catch (e) {}
-    scannerControls = null;
+  if (zxingReader) {
+    try { zxingReader.reset(); } catch (e) {}
   }
   const videoEl = document.getElementById('scanner-video');
   if (videoEl.srcObject) {
