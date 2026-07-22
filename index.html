@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Scan Désherbage — Bibliothèque</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.20.0/umd/index.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+       background: #1a1a2e; color: #eee; min-height: 100vh; }
+
+/* ── ÉCRAN DE CHARGEMENT ─────────────────────────────────────── */
+#load-screen {
+  min-height: 100vh; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; padding: 24px; gap: 20px;
+}
+#load-screen h1 { font-size: 20px; font-weight: 600; color: #e2e8f0; text-align: center; }
+#load-screen p  { font-size: 13px; color: #64748b; text-align: center; line-height: 1.6; }
+
+#drop-zone {
+  width: 100%; max-width: 420px;
+  border: 2px dashed #2d5986; border-radius: 16px;
+  padding: 32px 20px; text-align: center; cursor: pointer;
+  background: #16213e; transition: border-color 0.2s, background 0.2s;
+}
+#drop-zone.drag-over { border-color: #4f8ef7; background: #1e3a5f; }
+#drop-zone .drop-icon { font-size: 40px; margin-bottom: 12px; }
+#drop-zone .drop-title { font-size: 15px; font-weight: 600; color: #93c5fd; margin-bottom: 6px; }
+#drop-zone .drop-sub   { font-size: 12px; color: #64748b; }
+#file-input { display: none; }
+
+#load-status {
+  font-size: 13px; color: #94a3b8; text-align: center;
+  min-height: 20px; transition: color 0.2s;
+}
+#load-status.ok  { color: #10b981; }
+#load-status.err { color: #ef4444; }
+
+/* Mapping colonnes */
+#mapping-panel {
+  display: none; width: 100%; max-width: 420px;
+  background: #16213e; border: 1px solid #0f3460;
+  border-radius: 16px; padding: 16px; gap: 10px;
+  flex-direction: column;
+}
+#mapping-panel h2 { font-size: 13px; color: #93c5fd; font-weight: 600; margin-bottom: 4px; }
+#mapping-panel p  { font-size: 11px; color: #64748b; margin-bottom: 8px; }
+.map-row { display: flex; align-items: center; gap: 8px; }
+.map-label { font-size: 12px; color: #94a3b8; width: 130px; flex-shrink: 0; }
+.map-label .required { color: #ef4444; }
+.map-select {
+  flex: 1; background: #0f3460; border: 1px solid #1e4d7a;
+  border-radius: 8px; color: #e2e8f0; padding: 6px 10px;
+  font-size: 12px; outline: none;
+}
+#confirm-mapping {
+  margin-top: 8px; width: 100%; padding: 12px;
+  background: #1e4d7a; border: none; border-radius: 10px;
+  color: #93c5fd; font-size: 14px; font-weight: 600;
+  cursor: pointer;
+}
+#confirm-mapping:hover { background: #2d5986; }
+
+/* ── ÉCRAN PRINCIPAL ─────────────────────────────────────────── */
+#main-screen { display: none; flex-direction: column; min-height: 100vh; }
+
+#header {
+  background: #16213e; padding: 10px 16px;
+  display: flex; align-items: center; gap: 8px;
+  border-bottom: 1px solid #0f3460; flex-shrink: 0;
+}
+#header h1 { font-size: 15px; font-weight: 600; color: #e2e8f0; flex: 1; }
+#collection-badge {
+  font-size: 11px; background: #0f3460; color: #93c5fd;
+  padding: 3px 8px; border-radius: 20px; white-space: nowrap;
+}
+#change-file-btn {
+  background: none; border: 1px solid #2d5986; border-radius: 8px;
+  color: #64748b; font-size: 11px; padding: 4px 8px; cursor: pointer;
+}
+#change-file-btn:hover { color: #94a3b8; }
+
+#scan-zone { padding: 12px 16px 8px; }
+#input-wrap { position: relative; margin-bottom: 10px; }
+#scan-input {
+  width: 100%; padding: 14px 88px 14px 16px;
+  font-size: 18px; border-radius: 12px;
+  border: 2px solid #0f3460; background: #16213e;
+  color: #e2e8f0; outline: none; -webkit-appearance: none;
+}
+#scan-input:focus { border-color: #4f8ef7; }
+#scan-input::placeholder { color: #4a5568; font-size: 14px; }
+#clear-btn {
+  position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; color: #4a5568;
+  font-size: 20px; cursor: pointer; padding: 4px; line-height: 1;
+}
+#camera-btn {
+  position: absolute; right: 44px; top: 50%; transform: translateY(-50%);
+  background: #1e4d7a; border: none; color: #93c5fd;
+  font-size: 18px; cursor: pointer; padding: 6px 9px;
+  line-height: 1; border-radius: 8px;
+}
+#camera-btn:active { background: #2d5986; }
+
+/* ── OVERLAY SCAN CAMERA ─────────────────────────────────────── */
+#scanner-overlay {
+  display: none; position: fixed; inset: 0; z-index: 100;
+  background: #000; flex-direction: column;
+}
+#scanner-overlay.active { display: flex; }
+#scanner-video-wrap { position: relative; flex: 1; overflow: hidden; }
+#scanner-video { width: 100%; height: 100%; object-fit: cover; }
+#scanner-frame {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 78%; max-width: 340px; height: 34%;
+  border: 3px solid #4f8ef7; border-radius: 14px;
+  box-shadow: 0 0 0 2000px rgba(0,0,0,0.45);
+  pointer-events: none;
+}
+#scanner-hint {
+  position: absolute; bottom: 14%; left: 0; right: 0;
+  text-align: center; color: #cbd5e1; font-size: 13px;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+}
+#scanner-topbar {
+  position: absolute; top: 0; left: 0; right: 0;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 16px; z-index: 2;
+}
+#scanner-close, #scanner-torch {
+  background: rgba(22,33,62,0.85); border: none; color: #e2e8f0;
+  font-size: 20px; padding: 8px 14px; border-radius: 10px; cursor: pointer;
+}
+#scanner-status {
+  padding: 10px 16px; background: #16213e; color: #93c5fd;
+  font-size: 12px; text-align: center; min-height: 18px;
+}
+
+/* Résultat */
+#result { border-radius: 16px; overflow: hidden; margin-bottom: 10px; }
+.res-conserver { background: linear-gradient(135deg, #065f46, #047857); }
+.res-desherber { background: linear-gradient(135deg, #7f1d1d, #991b1b); }
+.res-inconnu   { background: #1e293b; border: 1px solid #334155; }
+.res-vide      { display: none; }
+
+#res-decision {
+  padding: 18px 20px 10px; font-size: 24px; font-weight: 700;
+  display: flex; align-items: center; gap: 10px;
+}
+.res-icon { font-size: 30px; }
+#res-raison { padding: 0 20px 6px; font-size: 12px; opacity: 0.85; font-style: italic; }
+#res-titre  {
+  padding: 8px 20px; font-size: 13px; font-weight: 500;
+  border-top: 1px solid rgba(255,255,255,0.15); line-height: 1.4;
+}
+#res-meta {
+  padding: 8px 20px 14px;
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 5px 12px; font-size: 11px; opacity: 0.8;
+}
+.meta-item { display: flex; gap: 5px; }
+.meta-label { color: rgba(255,255,255,0.5); }
+.meta-val   { font-weight: 500; }
+#score-bar-wrap { padding: 0 20px 14px; }
+#score-bar-label { font-size: 10px; opacity: 0.6; margin-bottom: 3px; }
+#score-bar-bg   { height: 5px; border-radius: 3px; background: rgba(255,255,255,0.15); }
+#score-bar-fill { height: 5px; border-radius: 3px; background: rgba(255,255,255,0.7); transition: width 0.3s; }
+
+/* Bouton bascule */
+#toggle-btn {
+  display: none; width: calc(100% - 32px); margin: 0 16px 8px;
+  padding: 11px 16px; border: none; border-radius: 12px;
+  font-size: 14px; font-weight: 700; cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+}
+#toggle-btn:active { transform: scale(0.97); }
+#toggle-btn.to-desherber { background: #7f1d1d; color: #fca5a5; }
+#toggle-btn.to-conserver { background: #065f46; color: #6ee7b7; }
+
+/* Export */
+#export-section { padding: 0 16px 10px; display: flex; flex-direction: column; gap: 7px; }
+.export-btn {
+  width: 100%; padding: 11px 16px;
+  background: #16213e; border: 1px solid #2d5986;
+  border-radius: 12px; color: #93c5fd;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+.export-btn:hover:not(:disabled) { background: #1e3a5f; }
+.export-btn:disabled { opacity: 0.35; cursor: default; }
+.export-badge {
+  border-radius: 20px; padding: 1px 8px;
+  font-size: 12px; font-weight: 700; color: white;
+}
+#badge-desherber { background: #ef4444; }
+#badge-scanned   { background: #475569; }
+
+/* Historique */
+#history-section { padding: 0 16px 80px; }
+#history-title {
+  font-size: 11px; color: #64748b; text-transform: uppercase;
+  letter-spacing: 0.08em; margin-bottom: 8px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+#clear-session-btn {
+  font-size: 11px; color: #475569; cursor: pointer;
+  background: none; border: none; padding: 0;
+}
+#history-list { display: flex; flex-direction: column; gap: 5px; }
+.hist-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 12px; border-radius: 10px;
+  background: #16213e; font-size: 12px;
+}
+.hist-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.hist-dot.conserver { background: #10b981; }
+.hist-dot.desherber { background: #ef4444; }
+.hist-cote  { color: #94a3b8; font-family: monospace; font-size: 11px; min-width: 55px; }
+.hist-titre { color: #cbd5e1; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-dec   { font-weight: 600; font-size: 11px; white-space: nowrap; }
+.hist-dec.conserver { color: #10b981; }
+.hist-dec.desherber { color: #ef4444; }
+
+/* Stats fixes en bas */
+#stats-bar {
+  display: flex; background: #16213e;
+  border-top: 1px solid #0f3460; padding: 10px 16px;
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
+}
+.stat-box { flex: 1; text-align: center; }
+.stat-box + .stat-box { border-left: 1px solid #0f3460; }
+.stat-n { font-size: 20px; font-weight: 700; line-height: 1; }
+.stat-n.green { color: #10b981; }
+.stat-n.red   { color: #ef4444; }
+.stat-n.gray  { color: #64748b; }
+.stat-label   { font-size: 10px; color: #64748b; margin-top: 2px; }
+
+@keyframes flash-green { 0%,100%{background:#1a1a2e} 20%{background:#064e3b} }
+@keyframes flash-red   { 0%,100%{background:#1a1a2e} 20%{background:#450a0a} }
+body.flash-green { animation: flash-green 0.4s; }
+body.flash-red   { animation: flash-red   0.4s; }
+</style>
+</head>
+<body>
+
+<!-- ══ ÉCRAN CHARGEMENT ══════════════════════════════════════════════ -->
+<div id="load-screen">
+  <h1>📚 Scan Désherbage</h1>
+  <p>Chargez le fichier Excel de votre collection<br>(export SIGB avec colonne Décision)</p>
+
+  <div id="drop-zone" onclick="document.getElementById('file-input').click()"
+       ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+    <div class="drop-icon">📂</div>
+    <div class="drop-title">Sélectionner ou déposer un fichier</div>
+    <div class="drop-sub">Format .xlsx — export SIGB ou fichier scoré</div>
+  </div>
+  <input type="file" id="file-input" accept=".xlsx" onchange="onFileSelected(event)">
+
+  <div id="load-status"></div>
+
+  <!-- Panel de mapping colonnes -->
+  <div id="mapping-panel">
+    <h2>Correspondance des colonnes</h2>
+    <p>Les colonnes obligatoires (•) n'ont pas été détectées automatiquement.<br>
+       Sélectionnez manuellement leur équivalent dans votre fichier.</p>
+    <div id="mapping-rows"></div>
+    <button id="confirm-mapping" onclick="confirmMapping()">Confirmer et démarrer →</button>
+  </div>
+</div>
+
+<!-- ══ ÉCRAN PRINCIPAL ════════════════════════════════════════════════ -->
+<div id="main-screen">
+  <div id="header">
+    <h1 id="app-title">Scan Désherbage</h1>
+    <span id="collection-badge">—</span>
+    <button id="change-file-btn" onclick="resetApp()">↩ Changer</button>
+  </div>
+
+  <div id="scan-zone">
+    <div id="input-wrap">
+      <input type="text" id="scan-input"
+             placeholder="Biper, scanner ou saisir le N° document…"
+             inputmode="numeric" autocomplete="off"
+             autocorrect="off" autocapitalize="off" spellcheck="false">
+      <button id="camera-btn" onclick="openScanner()" title="Scanner avec l'appareil photo">📷</button>
+      <button id="clear-btn" onclick="clearInput()">✕</button>
+    </div>
+
+    <div id="result" class="res-vide">
+      <div id="res-decision">
+        <span class="res-icon" id="res-icon"></span>
+        <span id="res-text"></span>
+      </div>
+      <div id="res-raison"></div>
+      <div id="res-titre"></div>
+      <div id="score-bar-wrap" style="display:none">
+        <div id="score-bar-label"></div>
+        <div id="score-bar-bg"><div id="score-bar-fill" style="width:0%"></div></div>
+      </div>
+      <div id="res-meta"></div>
+    </div>
+  </div>
+
+  <button id="toggle-btn" onclick="toggleDecision()"></button>
+
+  <div id="export-section">
+    <button class="export-btn" id="export-desherber-btn" onclick="exportCSV('desherber')" disabled>
+      🗑 Exporter les désherbage
+      <span class="export-badge" id="badge-desherber">0</span>
+    </button>
+    <button class="export-btn" id="export-all-btn" onclick="exportCSV('all')" disabled>
+      ⬇ Exporter tous les scannés
+      <span class="export-badge" id="badge-scanned">0</span>
+    </button>
+  </div>
+
+  <div id="history-section">
+    <div id="history-title">
+      <span>Derniers scans</span>
+      <button id="clear-session-btn" onclick="clearSession()">Effacer la session</button>
+    </div>
+    <div id="history-list"></div>
+  </div>
+
+  <div id="stats-bar">
+    <div class="stat-box">
+      <div class="stat-n green" id="stat-conserver">0</div>
+      <div class="stat-label">Conservés</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-n red" id="stat-desherber">0</div>
+      <div class="stat-label">À désherber</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-n gray" id="stat-total">0</div>
+      <div class="stat-label">Scannés</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ OVERLAY SCAN CAMÉRA ══════════════════════════════════════════ -->
+<div id="scanner-overlay">
+  <div id="scanner-video-wrap">
+    <video id="scanner-video" muted playsinline autoplay></video>
+    <div id="scanner-frame"></div>
+    <div id="scanner-hint">Centrez le code-barres dans le cadre</div>
+    <div id="scanner-topbar">
+      <button id="scanner-close" onclick="closeScanner()">✕ Fermer</button>
+      <button id="scanner-torch" onclick="toggleTorch()" style="display:none">💡</button>
+    </div>
+  </div>
+  <div id="scanner-status">Initialisation de la caméra…</div>
+</div>
+
+<script>
+// ── Mapping colonnes attendues ─────────────────────────────────────
+// clé interne → variantes possibles dans le fichier (insensible casse)
+const COL_MAP = {
+  ndoc:        { label: 'N° document',      required: true,
+                 aliases: ['n° document','n°document','numero document','ndoc','id','barcode','code barre'] },
+  titre:       { label: 'Titre',            required: true,
+                 aliases: ['titre','title','intitulé'] },
+  decision:    { label: 'Décision',         required: true,
+                 aliases: ['décision','decision','à conserver','conservation','desherbage','désherbage'] },
+  cote:        { label: 'Cote',             required: false,
+                 aliases: ['cote','côte','indice','classification'] },
+  genre:       { label: 'Genre / Collection',required: false,
+                 aliases: ['collection exemplaire','genre','domaine','catégorie documentaire','type'] },
+  localisation:{ label: 'Localisation',     required: false,
+                 aliases: ['localisation','location','site','bibliothèque','bibli'] },
+  prets_an:    { label: 'Prêts/an',         required: false,
+                 aliases: ['prêts année extrapolés','prêts/an','prets an','loans year','nb prêts année','nb prêts annuels'] },
+  prets_vie:   { label: 'Prêts vie',        required: false,
+                 aliases: ['prêts vie','prets vie','total prêts','loans total','nb prêts','nb prêts à vie'] },
+  dernier_pret:{ label: 'Dernier prêt',     required: false,
+                 aliases: ['dernier prêt','dernier pret','last loan','date dernier prêt'] },
+  score:       { label: 'Score',            required: false,
+                 aliases: ['score_conservation','score conservation','score /100','score'] },
+};
+
+let DB = {};
+let colMapping = {};  // clé interne → nom colonne réel dans le fichier
+let rawColumns = [];  // toutes les colonnes du fichier chargé
+let collectionName = '';
+let statsC = 0, statsD = 0;
+let historyRecent = [];
+let desherbScanned = [];
+let allScanned = [];   // tous les documents scannés
+let lastNdoc = null;   // dernier document scanné (pour bascule)
+
+// ── Détection automatique des colonnes ────────────────────────────
+function autoDetect(columns) {
+  const mapping = {};
+  const colsLower = columns.map(c => c.toLowerCase().trim());
+  for (const [key, def] of Object.entries(COL_MAP)) {
+    for (const alias of def.aliases) {
+      const idx = colsLower.findIndex(c => c.includes(alias) || alias.includes(c));
+      if (idx !== -1) { mapping[key] = columns[idx]; break; }
+    }
+  }
+  return mapping;
+}
+
+// ── Chargement fichier ─────────────────────────────────────────────
+function setStatus(msg, cls='') {
+  const el = document.getElementById('load-status');
+  el.textContent = msg; el.className = cls;
+}
+
+function onDragOver(e) { e.preventDefault(); document.getElementById('drop-zone').classList.add('drag-over'); }
+function onDragLeave()  { document.getElementById('drop-zone').classList.remove('drag-over'); }
+function onDrop(e)      { e.preventDefault(); onDragLeave(); if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); }
+function onFileSelected(e) { if (e.target.files[0]) loadFile(e.target.files[0]); }
+
+function loadFile(file) {
+  collectionName = file.name.replace(/\.xlsx$/i,'').replace(/_/g,' ');
+  setStatus('Lecture du fichier…');
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+      if (!rows.length) { setStatus('Fichier vide ou illisible.', 'err'); return; }
+
+      rawColumns = Object.keys(rows[0]);
+      colMapping  = autoDetect(rawColumns);
+
+      // Vérifier les colonnes obligatoires
+      const missing = Object.entries(COL_MAP)
+        .filter(([k, d]) => d.required && !colMapping[k])
+        .map(([k, d]) => d.label);
+
+      if (missing.length > 0) {
+        setStatus(`Colonnes non détectées : ${missing.join(', ')} — Veuillez les configurer ci-dessous.`, 'err');
+        showMappingPanel();
+      } else {
+        buildDB(rows);
+      }
+    } catch(err) {
+      setStatus('Erreur lors de la lecture : ' + err.message, 'err');
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function showMappingPanel() {
+  const panel = document.getElementById('mapping-panel');
+  const container = document.getElementById('mapping-rows');
+  container.innerHTML = '';
+  panel.style.display = 'flex';
+
+  for (const [key, def] of Object.entries(COL_MAP)) {
+    const row = document.createElement('div');
+    row.className = 'map-row';
+    row.innerHTML = `
+      <div class="map-label">${def.label}${def.required ? ' <span class="required">•</span>' : ''}</div>
+      <select class="map-select" id="map-${key}">
+        <option value="">— non utilisé —</option>
+        ${rawColumns.map(c => `<option value="${c}" ${colMapping[key]===c?'selected':''}>${c}</option>`).join('')}
+      </select>`;
+    container.appendChild(row);
+  }
+}
+
+function confirmMapping() {
+  for (const key of Object.keys(COL_MAP)) {
+    const sel = document.getElementById(`map-${key}`);
+    if (sel && sel.value) colMapping[key] = sel.value;
+  }
+  const missing = Object.entries(COL_MAP)
+    .filter(([k, d]) => d.required && !colMapping[k]).map(([,d]) => d.label);
+  if (missing.length) { setStatus('Colonnes obligatoires manquantes : ' + missing.join(', '), 'err'); return; }
+
+  // Relire le fichier avec le nouveau mapping
+  const fileInput = document.getElementById('file-input');
+  if (!fileInput.files[0]) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+    buildDB(rows);
+  };
+  reader.readAsArrayBuffer(fileInput.files[0]);
+}
+
+function buildDB(rows) {
+  DB = {};
+  let ok = 0, skip = 0;
+  for (const row of rows) {
+    const ndoc = String(row[colMapping.ndoc] || '').trim();
+    if (!ndoc) { skip++; continue; }
+    const decision = String(row[colMapping.decision] || '').trim();
+    const isConserver = decision.toUpperCase().includes('CONSERVER');
+
+    // Formater date
+    let dp = '';
+    if (colMapping.dernier_pret) {
+      const raw = row[colMapping.dernier_pret];
+      if (raw instanceof Date) {
+        dp = raw.toLocaleDateString('fr');
+      } else if (raw) {
+        // Parser le format Kibana : "Feb 1, 2026 @ 00:00:00.000"
+        const cleaned = String(raw).replace(/\s*@.*$/, '').trim();
+        const parsed = new Date(cleaned);
+        dp = !isNaN(parsed) ? parsed.toLocaleDateString('fr-FR') : String(raw);
+      }
+    }
+
+    // Tronquer titre
+    const titreRaw = colMapping.titre ? String(row[colMapping.titre] || '') : '';
+    const titre = titreRaw.length > 90 ? titreRaw.substring(0, 90) + '…' : titreRaw;
+
+    // Extraire raison courte depuis la décision (après " — ")
+    const raisonMatch = decision.match(/[—–-]\s*(.+)$/);
+    const raison = raisonMatch ? raisonMatch[1].trim() : decision;
+
+    // Score (si présent)
+    const scoreRaw = colMapping.score ? row[colMapping.score] : '';
+    const score = scoreRaw !== '' && !isNaN(scoreRaw) ? parseFloat(scoreRaw) : null;
+
+    DB[ndoc] = {
+      d:  isConserver ? 1 : 0,
+      r:  raison,
+      t:  titre,
+      c:  colMapping.cote        ? String(row[colMapping.cote]        || '') : '',
+      g:  colMapping.genre       ? String(row[colMapping.genre]       || '') : '',
+      l:  colMapping.localisation? String(row[colMapping.localisation]|| '') : '',
+      p:  colMapping.prets_an    ? (parseFloat(row[colMapping.prets_an]) || 0) : '',
+      pv: colMapping.prets_vie   ? (parseFloat(row[colMapping.prets_vie])|| 0) : '',
+      dp: dp,
+      s:  score,
+    };
+    ok++;
+  }
+  setStatus(`✓ ${ok.toLocaleString('fr')} notices chargées${skip ? ` (${skip} ignorées)` : ''}`, 'ok');
+  setTimeout(startApp, 600);
+}
+
+// ── Démarrage appli ───────────────────────────────────────────────
+function startApp() {
+  document.getElementById('load-screen').style.display = 'none';
+  document.getElementById('main-screen').style.display = 'flex';
+  document.getElementById('collection-badge').textContent =
+    Object.keys(DB).length.toLocaleString('fr') + ' notices';
+  document.getElementById('app-title').textContent =
+    collectionName.length > 30 ? collectionName.substring(0, 30) + '…' : collectionName;
+  document.getElementById('scan-input').focus();
+}
+
+function resetApp() {
+  DB = {}; colMapping = {}; rawColumns = [];
+  statsC = 0; statsD = 0; historyRecent = []; desherbScanned = []; allScanned = []; lastNdoc = null;
+  document.getElementById('load-screen').style.display = 'flex';
+  document.getElementById('main-screen').style.display = 'none';
+  document.getElementById('mapping-panel').style.display = 'none';
+  document.getElementById('file-input').value = '';
+  document.getElementById('toggle-btn').style.display = 'none';
+  setStatus('');
+  updateExportBtn();
+}
+
+// ── Lookup & affichage ────────────────────────────────────────────
+function renderResult(ndoc) {
+  const rec = DB[ndoc];
+  const res = document.getElementById('result');
+  const toggleBtn = document.getElementById('toggle-btn');
+
+  if (!rec) {
+    res.className = 'res-inconnu';
+    document.getElementById('res-icon').textContent = '❓';
+    document.getElementById('res-text').textContent = 'Non trouvé';
+    document.getElementById('res-raison').textContent = 'N° : ' + ndoc;
+    document.getElementById('res-titre').textContent = '';
+    document.getElementById('res-meta').innerHTML = '';
+    document.getElementById('score-bar-wrap').style.display = 'none';
+    toggleBtn.style.display = 'none';
+    return;
+  }
+
+  const isConserver = rec.d === 1;
+  res.className = isConserver ? 'res-conserver' : 'res-desherber';
+  document.getElementById('res-icon').textContent = isConserver ? '✅' : '🗑️';
+  document.getElementById('res-text').textContent  = isConserver ? 'À CONSERVER' : 'À DÉSHERBER';
+  document.getElementById('res-raison').textContent = rec.r;
+  document.getElementById('res-titre').textContent  = rec.t;
+
+  // Bouton bascule
+  toggleBtn.style.display = 'block';
+  if (isConserver) {
+    toggleBtn.textContent = '🗑 Basculer → DÉSHERBER';
+    toggleBtn.className = 'to-desherber';
+  } else {
+    toggleBtn.textContent = '✅ Basculer → CONSERVER';
+    toggleBtn.className = 'to-conserver';
+  }
+
+  if (rec.s !== null) {
+    document.getElementById('score-bar-wrap').style.display = 'block';
+    document.getElementById('score-bar-label').textContent = 'Score : ' + rec.s + '/100';
+    document.getElementById('score-bar-fill').style.width  = Math.min(rec.s, 100) + '%';
+  } else {
+    document.getElementById('score-bar-wrap').style.display = 'none';
+  }
+
+  const metaFields = [
+    ['Cote', rec.c], ['Site', rec.l], ['Genre', rec.g],
+    ['Prêts total', rec.pv !== '' ? rec.pv : null],
+    ['Dernier prêt', rec.dp],
+  ].filter(([, v]) => v !== null && v !== '' && v !== undefined);
+
+  document.getElementById('res-meta').innerHTML = metaFields.map(([l, v]) =>
+    `<div class="meta-item"><span class="meta-label">${l}</span><span class="meta-val">${v}</span></div>`
+  ).join('');
+
+  document.body.classList.remove('flash-green', 'flash-red');
+  void document.body.offsetWidth;
+  document.body.classList.add(isConserver ? 'flash-green' : 'flash-red');
+}
+
+function showResult(ndoc) {
+  if (!ndoc) return;
+  ndoc = ndoc.trim();
+  const rec = DB[ndoc];
+  if (!rec) { renderResult(ndoc); return; }
+
+  lastNdoc = ndoc;
+  const isConserver = rec.d === 1;
+  const ts = new Date().toLocaleTimeString('fr', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+  // Stats
+  if (isConserver) { statsC++; document.getElementById('stat-conserver').textContent = statsC; }
+  else             { statsD++; document.getElementById('stat-desherber').textContent = statsD; }
+  document.getElementById('stat-total').textContent = statsC + statsD;
+
+  // Historique
+  historyRecent.unshift({ ndoc, isConserver, cote: rec.c, titre: rec.t, ts });
+  if (historyRecent.length > 10) historyRecent.pop();
+  renderHistory();
+
+  // Tracker tous les scannés (dédupliqué : mise à jour si re-scanné)
+  const entry = {
+    ndoc, cote: rec.c, genre: rec.g, titre: rec.t,
+    site: rec.l, score: rec.s !== null ? rec.s : '',
+    decision: isConserver ? 'CONSERVER' : 'DÉSHERBER',
+    raison: rec.r, prets_an: rec.p, prets_vie: rec.pv,
+    dernier_pret: rec.dp, ts
+  };
+  const existIdx = allScanned.findIndex(x => x.ndoc === ndoc);
+  if (existIdx >= 0) allScanned[existIdx] = entry;
+  else allScanned.push(entry);
+
+  // Mettre à jour desherbScanned
+  syncDesherbScanned();
+  updateExportBtn();
+  renderResult(ndoc);
+}
+
+// Recalcule desherbScanned à partir de allScanned (source de vérité : DB)
+function syncDesherbScanned() {
+  desherbScanned = allScanned.filter(e => DB[e.ndoc] && DB[e.ndoc].d === 0);
+}
+
+// ── Bascule de décision ───────────────────────────────────────────
+function toggleDecision() {
+  if (!lastNdoc || !DB[lastNdoc]) return;
+  DB[lastNdoc].d = DB[lastNdoc].d === 1 ? 0 : 1;
+  const isConserver = DB[lastNdoc].d === 1;
+
+  // Mettre à jour stats
+  if (isConserver) { statsD = Math.max(0, statsD - 1); statsC++; }
+  else             { statsC = Math.max(0, statsC - 1); statsD++; }
+  document.getElementById('stat-conserver').textContent = statsC;
+  document.getElementById('stat-desherber').textContent = statsD;
+
+  // Mettre à jour l'entrée dans allScanned
+  const idx = allScanned.findIndex(x => x.ndoc === lastNdoc);
+  if (idx >= 0) allScanned[idx].decision = isConserver ? 'CONSERVER' : 'DÉSHERBER';
+
+  // Mettre à jour historique
+  const hIdx = historyRecent.findIndex(h => h.ndoc === lastNdoc);
+  if (hIdx >= 0) historyRecent[hIdx].isConserver = isConserver;
+  renderHistory();
+
+  syncDesherbScanned();
+  updateExportBtn();
+  renderResult(lastNdoc);
+}
+
+// ── Historique ────────────────────────────────────────────────────
+function renderHistory() {
+  document.getElementById('history-list').innerHTML = historyRecent.map(h => `
+    <div class="hist-item">
+      <div class="hist-dot ${h.isConserver ? 'conserver' : 'desherber'}"></div>
+      <div class="hist-cote">${h.cote || h.ndoc.slice(-6)}</div>
+      <div class="hist-titre">${h.titre}</div>
+      <div class="hist-dec ${h.isConserver ? 'conserver' : 'desherber'}">
+        ${h.isConserver ? 'CONSERVER' : 'DÉSHERBER'}
+      </div>
+    </div>`).join('');
+}
+
+function clearSession() {
+  statsC = 0; statsD = 0; historyRecent = []; desherbScanned = []; allScanned = []; lastNdoc = null;
+  ['stat-conserver','stat-desherber','stat-total'].forEach(id =>
+    document.getElementById(id).textContent = '0');
+  document.getElementById('result').className = 'res-vide';
+  document.getElementById('history-list').innerHTML = '';
+  document.getElementById('toggle-btn').style.display = 'none';
+  updateExportBtn();
+}
+
+// ── Export CSV ────────────────────────────────────────────────────
+function updateExportBtn() {
+  const nd = desherbScanned.length;
+  const na = allScanned.length;
+  document.getElementById('badge-desherber').textContent = nd;
+  document.getElementById('badge-scanned').textContent   = na;
+  document.getElementById('export-desherber-btn').disabled = (nd === 0);
+  document.getElementById('export-all-btn').disabled       = (na === 0);
+}
+
+function buildRow(r) {
+  const sep = ';';
+  return [
+    r.ndoc, r.cote, r.genre,
+    '"' + String(r.titre).replace(/"/g, '""') + '"',
+    r.site, r.score, r.decision,
+    r.raison, r.prets_an, r.prets_vie, r.dernier_pret, r.ts
+  ].join(sep);
+}
+
+function exportCSV(mode) {
+  const rows = mode === 'desherber' ? desherbScanned : allScanned;
+  if (!rows.length) return;
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('fr').replace(/\//g, '-');
+  const timeStr = now.toLocaleTimeString('fr', { hour:'2-digit', minute:'2-digit' }).replace(':', 'h');
+  const sep = ';';
+  const headers = ['N° document','Cote','Genre','Titre','Site','Score /100','Décision',
+                   'Raison','Prêts/an','Prêts vie','Dernier prêt','Heure scan'];
+  const csv = '\uFEFF' + headers.join(sep) + '\n' + rows.map(buildRow).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  const suffix = mode === 'desherber' ? 'desherbage' : 'tous_scannés';
+  a.download = `${suffix}_${collectionName.replace(/\s+/g,'_')}_${dateStr}_${timeStr}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Input / scan ──────────────────────────────────────────────────
+function clearInput() {
+  document.getElementById('scan-input').value = '';
+  document.getElementById('result').className = 'res-vide';
+  document.getElementById('scan-input').focus();
+}
+
+const input = document.getElementById('scan-input');
+let debounceTimer;
+input.addEventListener('input', () => {
+  clearTimeout(debounceTimer);
+  const val = input.value.trim();
+  if (val.length >= 8) {
+    debounceTimer = setTimeout(() => {
+      showResult(val);
+      input.value = '';
+      input.focus();
+    }, 80);
+  }
+});
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    clearTimeout(debounceTimer);
+    showResult(input.value.trim());
+    input.value = '';
+    input.focus();
+  }
+});
+
+// ── Scan caméra (ZXing) ─────────────────────────────────────────────
+let zxingReader = null;
+let currentStream = null;
+let torchOn = false;
+let lastScanTime = 0;
+let lastScanValue = '';
+
+function getZXingReader() {
+  if (zxingReader) return zxingReader;
+  const hints = new Map();
+  const formats = [
+    ZXing.BarcodeFormat.CODE_39,
+    ZXing.BarcodeFormat.CODE_128,
+    ZXing.BarcodeFormat.EAN_13,
+    ZXing.BarcodeFormat.EAN_8,
+    ZXing.BarcodeFormat.ITF,
+    ZXing.BarcodeFormat.CODABAR,
+  ];
+  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
+  hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+  zxingReader = new ZXing.BrowserMultiFormatReader(hints);
+  return zxingReader;
+}
+
+function setScannerStatus(msg) {
+  document.getElementById('scanner-status').textContent = msg;
+}
+
+async function openScanner() {
+  const overlay = document.getElementById('scanner-overlay');
+  overlay.classList.add('active');
+  setScannerStatus('Initialisation de la caméra…');
+  torchOn = false;
+  lastScanValue = '';
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setScannerStatus('Caméra non disponible sur ce navigateur.');
+    return;
+  }
+
+  try {
+    const reader = getZXingReader();
+    const videoEl = document.getElementById('scanner-video');
+
+    // Préférer la caméra arrière
+    const constraints = { video: { facingMode: { ideal: 'environment' } } };
+    currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+    videoEl.srcObject = currentStream;
+
+    // Afficher le bouton torche si supporté
+    const track = currentStream.getVideoTracks()[0];
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    document.getElementById('scanner-torch').style.display = caps.torch ? 'block' : 'none';
+
+    setScannerStatus('Visez le code-barres…');
+
+    reader.decodeFromStream(currentStream, videoEl, (result, err) => {
+      if (result) {
+        const text = result.getText();
+        const now = Date.now();
+        // Évite les doubles lectures du même code en rafale
+        if (text === lastScanValue && now - lastScanTime < 1500) return;
+        lastScanValue = text;
+        lastScanTime = now;
+
+        if (navigator.vibrate) navigator.vibrate(80);
+        setScannerStatus('✓ Code lu : ' + text);
+
+        document.getElementById('scan-input').value = text;
+        showResult(text);
+
+        setTimeout(closeScanner, 350);
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    if (err.name === 'NotAllowedError') {
+      setScannerStatus("Accès caméra refusé. Autorisez la caméra dans les réglages Safari.");
+    } else if (err.name === 'NotFoundError') {
+      setScannerStatus('Aucune caméra trouvée sur cet appareil.');
+    } else {
+      setScannerStatus('Erreur caméra : ' + err.message);
+    }
+  }
+}
+
+function closeScanner() {
+  const overlay = document.getElementById('scanner-overlay');
+  overlay.classList.remove('active');
+  if (zxingReader) {
+    try { zxingReader.reset(); } catch (e) {}
+  }
+  if (currentStream) {
+    currentStream.getTracks().forEach(t => t.stop());
+    currentStream = null;
+  }
+  document.getElementById('scan-input').focus();
+}
+
+async function toggleTorch() {
+  if (!currentStream) return;
+  const track = currentStream.getVideoTracks()[0];
+  if (!track || !track.getCapabilities || !track.getCapabilities().torch) return;
+  torchOn = !torchOn;
+  try {
+    await track.applyConstraints({ advanced: [{ torch: torchOn }] });
+    document.getElementById('scanner-torch').textContent = torchOn ? '💡✓' : '💡';
+  } catch (e) { console.error(e); }
+}
+</script>
+</body>
+</html>
