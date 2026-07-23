@@ -4,6 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Scan Désherbage — Bibliothèque</title>
+
+<!-- Icônes et manifest pour ajout à l'écran d'accueil (iOS + Android) -->
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Désherbage">
+<meta name="theme-color" content="#16213e">
+
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.19.1/umd/index.min.js"></script>
 <style>
@@ -488,6 +498,59 @@ function confirmMapping() {
   reader.readAsArrayBuffer(fileInput.files[0]);
 }
 
+// ── Sauvegarde locale (persistance entre sessions) ─────────────────
+const STORAGE_KEY = 'desherb_progress_v1';
+
+function persistProgress() {
+  try {
+    const payload = {
+      collectionName,
+      historyRecent, desherbScanned, allScanned,
+      savedAt: Date.now()
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  } catch (e) {
+    console.warn('Sauvegarde locale impossible :', e);
+  }
+}
+
+function clearSavedProgress() {
+  try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+}
+
+function tryRestoreProgress() {
+  let saved;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    saved = JSON.parse(raw);
+  } catch (e) { return; }
+  if (!saved || saved.collectionName !== collectionName) return;
+  if (!Array.isArray(saved.allScanned) || !saved.allScanned.length) return;
+
+  // Réappliquer les bascules manuelles éventuelles sur la base fraîchement rechargée
+  for (const entry of saved.allScanned) {
+    const rec = DB[entry.ndoc];
+    if (rec) rec.d = entry.decision === 'CONSERVER' ? 1 : 0;
+  }
+
+  allScanned = saved.allScanned;
+  historyRecent = saved.historyRecent || [];
+  syncDesherbScanned();
+
+  statsC = allScanned.filter(e => e.decision === 'CONSERVER').length;
+  statsD = allScanned.filter(e => e.decision === 'DÉSHERBER').length;
+  document.getElementById('stat-conserver').textContent = statsC;
+  document.getElementById('stat-desherber').textContent = statsD;
+  document.getElementById('stat-total').textContent = statsC + statsD;
+  renderHistory();
+  updateExportBtn();
+
+  const savedDate = new Date(saved.savedAt).toLocaleString('fr',
+    { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  setStatus(`↺ Session du ${savedDate} restaurée : ${allScanned.length} document(s) déjà scanné(s)`, 'ok');
+}
+
 function buildDB(rows) {
   DB = {};
   let ok = 0, skip = 0;
@@ -538,6 +601,7 @@ function buildDB(rows) {
     ok++;
   }
   setStatus(`✓ ${ok.toLocaleString('fr')} notices chargées${skip ? ` (${skip} ignorées)` : ''}`, 'ok');
+  tryRestoreProgress();
   setTimeout(startApp, 600);
 }
 
@@ -562,6 +626,7 @@ function resetApp() {
   document.getElementById('toggle-btn').style.display = 'none';
   setStatus('');
   updateExportBtn();
+  clearSavedProgress();
 }
 
 // ── Lookup & affichage ────────────────────────────────────────────
@@ -658,6 +723,7 @@ function showResult(ndoc) {
   syncDesherbScanned();
   updateExportBtn();
   renderResult(ndoc);
+  persistProgress();
 }
 
 // Recalcule desherbScanned à partir de allScanned (source de vérité : DB)
@@ -689,6 +755,7 @@ function toggleDecision() {
   syncDesherbScanned();
   updateExportBtn();
   renderResult(lastNdoc);
+  persistProgress();
 }
 
 // ── Historique ────────────────────────────────────────────────────
@@ -712,6 +779,7 @@ function clearSession() {
   document.getElementById('history-list').innerHTML = '';
   document.getElementById('toggle-btn').style.display = 'none';
   updateExportBtn();
+  clearSavedProgress();
 }
 
 // ── Export CSV ────────────────────────────────────────────────────
@@ -766,7 +834,7 @@ let debounceTimer;
 input.addEventListener('input', () => {
   clearTimeout(debounceTimer);
   const val = input.value.trim();
-  if (val.length >= 8) {
+  if (val.length >= 10) {
     debounceTimer = setTimeout(() => {
       showResult(val);
       input.value = '';
